@@ -39,4 +39,3 @@ Thumbs.db
 *.pem
 credentials.json
 .env.*
-!
