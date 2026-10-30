@@ -25,6 +25,9 @@ from instant_transmission.state import AppState, TeleportController
 _log = logging.getLogger(__name__)
 
 _QUIT_KEYS = frozenset({ord("q"), ord("Q"), 27})
+# A hitch shorter than this still counts in full. Longer stalls (first
+# MediaPipe call, a blocked camera) cannot skip calibration or the teleport.
+_MIN_DT_CAP_S = 0.1
 _stop_requested = False
 
 
@@ -107,6 +110,18 @@ def _display_frame(
     )
 
 
+def _clamp_dt(elapsed: float, fps: int) -> float:
+    """Limit one frame's timestep to about ``1/fps``, and at least 0.1s.
+
+    Normal frame intervals pass through. A multi-second gap becomes a single
+    short step so the teleport animation and calibration cannot jump to done.
+    """
+    if elapsed <= 0.0:
+        return 0.0
+    frame = 1.0 / max(int(fps), 1)
+    return min(elapsed, max(frame, _MIN_DT_CAP_S))
+
+
 def _loop(
     capture: CameraCapture,
     output: FrameOutput,
@@ -114,14 +129,17 @@ def _loop(
     sfx: SfxPlayer,
     calibrator: BackgroundCalibrator,
     controller: TeleportController,
+    fps: int,
 ) -> None:
+    # Clock starts after model warmup, so the first live frame does not
+    # include graph compilation. ``_clamp_dt`` covers any later stall.
     previous = time.perf_counter()
     while True:
         if _stop_requested:
             return
         frame = cv2.flip(capture.read(), 1)
         now = time.perf_counter()
-        dt = now - previous
+        dt = _clamp_dt(now - previous, fps)
         previous = now
 
         state = controller.state
@@ -179,10 +197,12 @@ def run(config: AppConfig) -> int:
             virtual_backend=config.virtual_backend,
         )
         gesture = GestureDetector()
+        _log.info("Loading models…")
+        gesture.warmup(config.width, config.height)
         sfx = SfxPlayer(config.sfx_path, config.sfx_enabled)
         calibrator = BackgroundCalibrator(config.calibration_seconds)
         controller = TeleportController(config.cooldown_seconds, config.teleport_seconds)
-        _loop(capture, output, gesture, sfx, calibrator, controller)
+        _loop(capture, output, gesture, sfx, calibrator, controller, config.fps)
         return 0
     except KeyboardInterrupt:
         return 0
