@@ -1,0 +1,240 @@
+# src/instant_transmission/gesture.py
+"""Instant Transmission pose from hand and face landmarks.
+
+Thresholds are pixels. ``image_size`` is ``(width, height)``. Normalized
+landmark ``x``/``y`` are scaled by those dimensions before any comparison.
+Values below were checked against ``tests/test_gesture.py`` on a 1280×720
+frame:
+
+- index tip sits about 7 px from forehead landmark 10; middle tip about 27 px
+- index and middle tips sit about 26 px apart
+- the far-from-forehead fixture is more than 500 px from that landmark
+- extended index/middle project about 1.8 times the wrist→PIP segment
+- folded ring/pinky project about 0.65–0.72 times that same segment
+"""
+
+from __future__ import annotations
+
+import math
+import time
+import urllib.request
+from pathlib import Path
+from typing import Protocol
+
+# Both index and middle tips must fall inside this radius of the forehead.
+FOREHEAD_RADIUS = 90.0
+# Index tip and middle tip must be at least this close (fingers together).
+FINGER_TOGETHER_DIST = 70.0
+# Tip projection onto the wrist→PIP axis, divided by that segment's length.
+# Above EXTENDED_REACH the fingertip is past the PIP (finger extended).
+# Below FOLDED_REACH the fingertip is short of the PIP (finger folded).
+EXTENDED_REACH = 1.25
+FOLDED_REACH = 0.90
+
+# MediaPipe Hands landmark indices.
+_WRIST = 0
+_INDEX_PIP = 6
+_INDEX_TIP = 8
+_MIDDLE_PIP = 10
+_MIDDLE_TIP = 12
+_RING_PIP = 14
+_RING_TIP = 16
+_PINKY_PIP = 18
+_PINKY_TIP = 20
+# MediaPipe Face Mesh / Face Landmarker forehead landmark.
+_FOREHEAD = 10
+
+_MODEL_DIR = Path.home() / ".cache" / "shunkan-ido"
+_HAND_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/1/hand_landmarker.task"
+)
+_FACE_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/1/face_landmarker.task"
+)
+
+
+class _Landmark(Protocol):
+    x: float
+    y: float
+
+
+def _pixel(landmark: _Landmark, width: int, height: int) -> tuple[float, float]:
+    return (landmark.x * width, landmark.y * height)
+
+
+def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def _axis_reach(
+    tip: tuple[float, float],
+    pip: tuple[float, float],
+    wrist: tuple[float, float],
+) -> float:
+    """How far the tip lies along the wrist→PIP axis, in units of that segment.
+
+    ``1`` is exactly at the PIP. Larger values are beyond it (extended);
+    smaller values are closer to the wrist (folded).
+    """
+    axis_x = pip[0] - wrist[0]
+    axis_y = pip[1] - wrist[1]
+    length_sq = axis_x * axis_x + axis_y * axis_y
+    if length_sq < 1e-6:
+        return 0.0
+    tip_x = tip[0] - wrist[0]
+    tip_y = tip[1] - wrist[1]
+    return (tip_x * axis_x + tip_y * axis_y) / length_sq
+
+
+def is_instant_transmission(
+    hand_landmarks: list[_Landmark],
+    face_landmarks: list[_Landmark],
+    image_size: tuple[int, int],
+) -> bool:
+    """Return True when the hand matches the Instant Transmission pose.
+
+    Index and middle are extended and together, near the forehead. Ring and
+    pinky are folded. ``image_size`` is ``(width, height)``.
+    """
+    if not hand_landmarks or not face_landmarks:
+        return False
+    if len(hand_landmarks) <= _PINKY_TIP or len(face_landmarks) <= _FOREHEAD:
+        return False
+    width, height = image_size
+    if width <= 0 or height <= 0:
+        return False
+
+    wrist = _pixel(hand_landmarks[_WRIST], width, height)
+    index_pip = _pixel(hand_landmarks[_INDEX_PIP], width, height)
+    index_tip = _pixel(hand_landmarks[_INDEX_TIP], width, height)
+    middle_pip = _pixel(hand_landmarks[_MIDDLE_PIP], width, height)
+    middle_tip = _pixel(hand_landmarks[_MIDDLE_TIP], width, height)
+    ring_pip = _pixel(hand_landmarks[_RING_PIP], width, height)
+    ring_tip = _pixel(hand_landmarks[_RING_TIP], width, height)
+    pinky_pip = _pixel(hand_landmarks[_PINKY_PIP], width, height)
+    pinky_tip = _pixel(hand_landmarks[_PINKY_TIP], width, height)
+    forehead = _pixel(face_landmarks[_FOREHEAD], width, height)
+
+    if _axis_reach(index_tip, index_pip, wrist) < EXTENDED_REACH:
+        return False
+    if _axis_reach(middle_tip, middle_pip, wrist) < EXTENDED_REACH:
+        return False
+    if _axis_reach(ring_tip, ring_pip, wrist) > FOLDED_REACH:
+        return False
+    if _axis_reach(pinky_tip, pinky_pip, wrist) > FOLDED_REACH:
+        return False
+    if _distance(index_tip, forehead) > FOREHEAD_RADIUS:
+        return False
+    if _distance(middle_tip, forehead) > FOREHEAD_RADIUS:
+        return False
+    if _distance(index_tip, middle_tip) > FINGER_TOGETHER_DIST:
+        return False
+    return True
+
+
+def _cached_model(url: str, filename: str) -> Path:
+    dest = _MODEL_DIR / filename
+    if dest.is_file() and dest.stat().st_size > 0:
+        return dest
+    _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    partial = dest.with_suffix(".part")
+    urllib.request.urlretrieve(url, partial)
+    partial.replace(dest)
+    return dest
+
+
+class GestureDetector:
+    """MediaPipe Hands + Face Landmarker wrapper.
+
+    Graphs are created on the first ``process`` call. ``close`` releases them.
+    MediaPipe 1.2 ships the Tasks API, so the float16 hand and face landmarker
+    models are downloaded once into ``~/.cache/shunkan-ido``.
+    """
+
+    def __init__(self) -> None:
+        self._hands = None
+        self._face = None
+        self._timestamp_ms = 0
+
+    def _ensure_loaded(self) -> None:
+        if self._hands is not None and self._face is not None:
+            return
+        import mediapipe as mp
+        from mediapipe.tasks.python.core.base_options import BaseOptions
+        from mediapipe.tasks.python.vision import (
+            FaceLandmarker,
+            FaceLandmarkerOptions,
+            HandLandmarker,
+            HandLandmarkerOptions,
+        )
+        from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
+            VisionTaskRunningMode,
+        )
+
+        hand_path = _cached_model(_HAND_MODEL_URL, "hand_landmarker.task")
+        face_path = _cached_model(_FACE_MODEL_URL, "face_landmarker.task")
+        self._mp = mp
+        hands = None
+        face = None
+        try:
+            hands = HandLandmarker.create_from_options(
+                HandLandmarkerOptions(
+                    base_options=BaseOptions(model_asset_path=str(hand_path)),
+                    running_mode=VisionTaskRunningMode.VIDEO,
+                    num_hands=2,
+                )
+            )
+            face = FaceLandmarker.create_from_options(
+                FaceLandmarkerOptions(
+                    base_options=BaseOptions(model_asset_path=str(face_path)),
+                    running_mode=VisionTaskRunningMode.VIDEO,
+                    num_faces=1,
+                )
+            )
+        except Exception:
+            if hands is not None:
+                hands.close()
+            if face is not None:
+                face.close()
+            raise
+        self._hands = hands
+        self._face = face
+
+    def _next_timestamp_ms(self) -> int:
+        now = int(time.monotonic() * 1000)
+        if now <= self._timestamp_ms:
+            now = self._timestamp_ms + 1
+        self._timestamp_ms = now
+        return now
+
+    def process(self, frame_bgr) -> bool:
+        """Return True when this BGR frame shows the Instant Transmission pose."""
+        import cv2
+
+        self._ensure_loaded()
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        if not rgb.flags["C_CONTIGUOUS"]:
+            rgb = rgb.copy()
+        mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
+        timestamp_ms = self._next_timestamp_ms()
+        hand_result = self._hands.detect_for_video(mp_image, timestamp_ms)
+        face_result = self._face.detect_for_video(mp_image, timestamp_ms)
+        if not hand_result.hand_landmarks or not face_result.face_landmarks:
+            return False
+        height, width = frame_bgr.shape[:2]
+        face = face_result.face_landmarks[0]
+        image_size = (width, height)
+        return any(
+            is_instant_transmission(hand, face, image_size)
+            for hand in hand_result.hand_landmarks
+        )
+
+    def close(self) -> None:
+        if self._hands is not None:
+            self._hands.close()
+            self._hands = None
+        if self._face is not None:
+            self._face.close()
+            self._face = None
