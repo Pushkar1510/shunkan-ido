@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shunkan-ido"
+version = "0.1.0"
+description = "Instant Transmission webcam vanish for video meetings"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "opencv-python>=4.8",
+  "mediapipe>=0.10",
+  "numpy>=1.26",
+  "pygame>=2.5",
+  "pyvirtualcam>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+shunkan-ido = "instant_transmission.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
