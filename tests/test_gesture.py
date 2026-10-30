@@ -98,6 +98,43 @@ def test_model_download_timeout_raises_runtime_error(monkeypatch, tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_model_download_cancelled_by_stop_callback(monkeypatch, tmp_path):
+    import instant_transmission.gesture as gesture
+
+    class _Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, _size):
+            return b"x" * 1024
+
+    def fake_urlopen(url, timeout=0):
+        return _Stream()
+
+    stopped = {"n": 0}
+
+    def should_stop():
+        stopped["n"] += 1
+        return stopped["n"] >= 2
+
+    monkeypatch.setattr(gesture.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(gesture, "_MODEL_DIR", tmp_path)
+    try:
+        gesture._cached_model(
+            "https://example.invalid/hand.task",
+            "hand_landmarker.task",
+            should_stop=should_stop,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "download cancelled"
+    else:
+        raise AssertionError("expected RuntimeError")
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_cached_model_skips_download(monkeypatch, tmp_path):
     import instant_transmission.gesture as gesture
 

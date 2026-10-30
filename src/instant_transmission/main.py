@@ -196,17 +196,24 @@ def run(config: AppConfig) -> int:
             virtual_camera=config.virtual_camera,
             virtual_backend=config.virtual_backend,
         )
-        gesture = GestureDetector()
+        gesture = GestureDetector(should_stop=lambda: _stop_requested)
         _log.info("Loading models…")
         gesture.warmup(config.width, config.height)
+        if _stop_requested:
+            _log.info("Interrupted during model load")
+            return 0
         sfx = SfxPlayer(config.sfx_path, config.sfx_enabled)
         calibrator = BackgroundCalibrator(config.calibration_seconds)
         controller = TeleportController(config.cooldown_seconds, config.teleport_seconds)
         _loop(capture, output, gesture, sfx, calibrator, controller, config.fps)
         return 0
     except KeyboardInterrupt:
+        _log.info("Interrupted")
         return 0
     except RuntimeError as exc:
+        if str(exc) == "download cancelled":
+            _log.info("Interrupted during model load")
+            return 0
         _log.error("%s", exc)
         return 1
     except Exception:

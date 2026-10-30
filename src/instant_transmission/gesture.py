@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -61,8 +62,8 @@ _FACE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/1/face_landmarker.task"
 )
-# Socket timeout for each blocking read. A stalled host fails instead of hanging.
-_DOWNLOAD_TIMEOUT_S = 60.0
+# Per-read socket timeout so stop callbacks are polled every few seconds.
+_READ_TIMEOUT_S = 3.0
 
 
 class _Landmark(Protocol):
@@ -157,33 +158,53 @@ def is_instant_transmission(
     return True
 
 
-def _download_model(url: str, dest: Path, timeout: float = _DOWNLOAD_TIMEOUT_S) -> None:
+def _download_model(
+    url: str,
+    dest: Path,
+    *,
+    read_timeout: float = _READ_TIMEOUT_S,
+    should_stop: Callable[[], bool] | None = None,
+) -> None:
     """Write ``url`` to ``dest``. Raises RuntimeError on timeout or HTTP failure.
 
-    ``urlopen``'s timeout covers the connect and each later socket read, so a
-    hung transfer surfaces as an error instead of blocking until the process
-    is killed. KeyboardInterrupt is left alone so Ctrl+C still exits.
+    Each socket read uses ``read_timeout`` so ``should_stop`` is checked often.
+    KeyboardInterrupt and download cancellation are not wrapped.
     """
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with urllib.request.urlopen(url, timeout=read_timeout) as response:
             with dest.open("wb") as handle:
                 while True:
+                    if should_stop is not None and should_stop():
+                        raise RuntimeError("download cancelled")
                     chunk = response.read(65536)
                     if not chunk:
                         break
                     handle.write(chunk)
+                    if should_stop is not None and should_stop():
+                        raise RuntimeError("download cancelled")
+    except KeyboardInterrupt:
+        raise
+    except RuntimeError:
+        raise
     except Exception as exc:
         raise RuntimeError(f"Failed to download model from {url}: {exc}") from exc
 
 
-def _cached_model(url: str, filename: str) -> Path:
+def _cached_model(
+    url: str,
+    filename: str,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> Path:
     dest = _MODEL_DIR / filename
     if dest.is_file() and dest.stat().st_size > 0:
         return dest
+    if should_stop is not None and should_stop():
+        raise RuntimeError("download cancelled")
     _MODEL_DIR.mkdir(parents=True, exist_ok=True)
     partial = dest.with_suffix(".part")
     try:
-        _download_model(url, partial)
+        _download_model(url, partial, should_stop=should_stop)
         if not partial.is_file() or partial.stat().st_size <= 0:
             raise RuntimeError(f"Downloaded model is empty: {url}")
         partial.replace(dest)
@@ -201,7 +222,8 @@ class GestureDetector:
     models are downloaded once into ``~/.cache/shunkan-ido``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, should_stop: Callable[[], bool] | None = None) -> None:
+        self._should_stop = should_stop
         self._hands = None
         self._face = None
         self._timestamp_ms = 0
@@ -209,6 +231,8 @@ class GestureDetector:
     def _ensure_loaded(self) -> None:
         if self._hands is not None and self._face is not None:
             return
+        if self._should_stop is not None and self._should_stop():
+            raise RuntimeError("download cancelled")
         import mediapipe as mp
         from mediapipe.tasks.python.core.base_options import BaseOptions
         from mediapipe.tasks.python.vision import (
@@ -221,8 +245,11 @@ class GestureDetector:
             VisionTaskRunningMode,
         )
 
-        hand_path = _cached_model(_HAND_MODEL_URL, "hand_landmarker.task")
-        face_path = _cached_model(_FACE_MODEL_URL, "face_landmarker.task")
+        stop = self._should_stop
+        hand_path = _cached_model(_HAND_MODEL_URL, "hand_landmarker.task", should_stop=stop)
+        if stop is not None and stop():
+            raise RuntimeError("download cancelled")
+        face_path = _cached_model(_FACE_MODEL_URL, "face_landmarker.task", should_stop=stop)
         self._mp = mp
         hands = None
         face = None
