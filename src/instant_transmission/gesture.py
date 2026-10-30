@@ -1,8 +1,12 @@
 # src/instant_transmission/gesture.py
 """Instant Transmission pose from hand and face landmarks.
 
-Thresholds are pixels. ``image_size`` is ``(width, height)``. Normalized
-landmark ``x``/``y`` are scaled by those dimensions before any comparison.
+Finger extension is a ratio, so it does not depend on frame size.
+``FOREHEAD_RADIUS`` and ``FINGER_TOGETHER_DIST`` are pixels on a 1280×720
+frame. Those two comparisons are mapped back onto that baseline, so the same
+normalized landmarks match at other resolutions. ``image_size`` is
+``(width, height)``.
+
 Values below were checked against ``tests/test_gesture.py`` on a 1280×720
 frame:
 
@@ -22,9 +26,13 @@ from pathlib import Path
 from typing import Protocol
 
 # Both index and middle tips must fall inside this radius of the forehead.
+# Pixels on a 1280×720 frame; scaled to the current frame before compare.
 FOREHEAD_RADIUS = 90.0
 # Index tip and middle tip must be at least this close (fingers together).
+# Pixels on a 1280×720 frame; scaled to the current frame before compare.
 FINGER_TOGETHER_DIST = 70.0
+_BASELINE_WIDTH = 1280.0
+_BASELINE_HEIGHT = 720.0
 # Tip projection onto the wrist→PIP axis, divided by that segment's length.
 # Above EXTENDED_REACH the fingertip is past the PIP (finger extended).
 # Below FOLDED_REACH the fingertip is short of the PIP (finger folded).
@@ -53,6 +61,8 @@ _FACE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/1/face_landmarker.task"
 )
+# Socket timeout for each blocking read. A stalled host fails instead of hanging.
+_DOWNLOAD_TIMEOUT_S = 60.0
 
 
 class _Landmark(Protocol):
@@ -64,8 +74,21 @@ def _pixel(landmark: _Landmark, width: int, height: int) -> tuple[float, float]:
     return (landmark.x * width, landmark.y * height)
 
 
-def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
-    return math.hypot(a[0] - b[0], a[1] - b[1])
+def _baseline_distance(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    width: int,
+    height: int,
+) -> float:
+    """Distance in 1280×720 pixels, independent of the current frame size.
+
+    ``a`` and ``b`` are pixels in the current frame. Scaling each axis by the
+    baseline over the frame size keeps a normalized landmark gap on the same
+    threshold at 720p and at other resolutions.
+    """
+    sx = _BASELINE_WIDTH / width
+    sy = _BASELINE_HEIGHT / height
+    return math.hypot((a[0] - b[0]) * sx, (a[1] - b[1]) * sy)
 
 
 def _axis_reach(
@@ -125,13 +148,32 @@ def is_instant_transmission(
         return False
     if _axis_reach(pinky_tip, pinky_pip, wrist) > FOLDED_REACH:
         return False
-    if _distance(index_tip, forehead) > FOREHEAD_RADIUS:
+    if _baseline_distance(index_tip, forehead, width, height) > FOREHEAD_RADIUS:
         return False
-    if _distance(middle_tip, forehead) > FOREHEAD_RADIUS:
+    if _baseline_distance(middle_tip, forehead, width, height) > FOREHEAD_RADIUS:
         return False
-    if _distance(index_tip, middle_tip) > FINGER_TOGETHER_DIST:
+    if _baseline_distance(index_tip, middle_tip, width, height) > FINGER_TOGETHER_DIST:
         return False
     return True
+
+
+def _download_model(url: str, dest: Path, timeout: float = _DOWNLOAD_TIMEOUT_S) -> None:
+    """Write ``url`` to ``dest``. Raises RuntimeError on timeout or HTTP failure.
+
+    ``urlopen``'s timeout covers the connect and each later socket read, so a
+    hung transfer surfaces as an error instead of blocking until the process
+    is killed. KeyboardInterrupt is left alone so Ctrl+C still exits.
+    """
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            with dest.open("wb") as handle:
+                while True:
+                    chunk = response.read(65536)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to download model from {url}: {exc}") from exc
 
 
 def _cached_model(url: str, filename: str) -> Path:
@@ -140,15 +182,21 @@ def _cached_model(url: str, filename: str) -> Path:
         return dest
     _MODEL_DIR.mkdir(parents=True, exist_ok=True)
     partial = dest.with_suffix(".part")
-    urllib.request.urlretrieve(url, partial)
-    partial.replace(dest)
+    try:
+        _download_model(url, partial)
+        if not partial.is_file() or partial.stat().st_size <= 0:
+            raise RuntimeError(f"Downloaded model is empty: {url}")
+        partial.replace(dest)
+    finally:
+        if partial.exists():
+            partial.unlink(missing_ok=True)
     return dest
 
 
 class GestureDetector:
     """MediaPipe Hands + Face Landmarker wrapper.
 
-    Graphs are created on the first ``process`` call. ``close`` releases them.
+    Graphs are created on the first ``warmup`` or ``process`` call. ``close`` releases them.
     MediaPipe 1.2 ships the Tasks API, so the float16 hand and face landmarker
     models are downloaded once into ``~/.cache/shunkan-ido``.
     """
@@ -208,6 +256,18 @@ class GestureDetector:
             now = self._timestamp_ms + 1
         self._timestamp_ms = now
         return now
+
+    def warmup(self, width: int = 1280, height: int = 720) -> None:
+        """Load the landmarkers and run one inference before the capture loop.
+
+        The first video-mode call compiles the graphs. Doing that here, on a
+        black frame, keeps that cost out of the first live ``dt``.
+        """
+        import numpy as np
+
+        if width <= 0 or height <= 0:
+            width, height = 1280, 720
+        self.process(np.zeros((height, width, 3), dtype=np.uint8))
 
     def process(self, frame_bgr) -> bool:
         """Return True when this BGR frame shows the Instant Transmission pose."""

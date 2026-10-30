@@ -42,13 +42,21 @@ def _face_forehead():
     return pts
 
 
+_SIZES = ((1280, 720), (640, 360), (3840, 2160))
+
+
 def test_valid_instant_transmission_pose():
-    assert is_instant_transmission(_hand(), _face_forehead(), (1280, 720)) is True
+    hand = _hand()
+    face = _face_forehead()
+    for image_size in _SIZES:
+        assert is_instant_transmission(hand, face, image_size) is True
 
 
 def test_rejects_when_fingers_far_from_forehead():
     hand = _hand(index_tip=(0.2, 0.8), middle_tip=(0.22, 0.8))
-    assert is_instant_transmission(hand, _face_forehead(), (1280, 720)) is False
+    face = _face_forehead()
+    for image_size in _SIZES:
+        assert is_instant_transmission(hand, face, image_size) is False
 
 
 def test_rejects_open_palm():
@@ -58,4 +66,47 @@ def test_rejects_open_palm():
         pinky_pip=(0.56, 0.41),
         pinky_tip=(0.56, 0.27),
     )
-    assert is_instant_transmission(hand, _face_forehead(), (1280, 720)) is False
+    face = _face_forehead()
+    for image_size in _SIZES:
+        assert is_instant_transmission(hand, face, image_size) is False
+
+
+def test_model_download_timeout_raises_runtime_error(monkeypatch, tmp_path):
+    import instant_transmission.gesture as gesture
+
+    class _Hung:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, _size):
+            raise TimeoutError("timed out")
+
+    def boom(url, timeout=0):
+        return _Hung()
+
+    monkeypatch.setattr(gesture.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(gesture, "_MODEL_DIR", tmp_path)
+    try:
+        gesture._cached_model("https://example.invalid/hand.task", "hand_landmarker.task")
+    except RuntimeError as exc:
+        assert "timed out" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cached_model_skips_download(monkeypatch, tmp_path):
+    import instant_transmission.gesture as gesture
+
+    dest = tmp_path / "hand_landmarker.task"
+    dest.write_bytes(b"ok")
+
+    def boom(url, timeout=0):
+        raise AssertionError("should not download")
+
+    monkeypatch.setattr(gesture.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(gesture, "_MODEL_DIR", tmp_path)
+    assert gesture._cached_model("https://example.invalid/hand.task", "hand_landmarker.task") == dest
