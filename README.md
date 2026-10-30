@@ -73,7 +73,7 @@ python -m instant_transmission.main --help
 | `--no-sfx` | Disable sound |
 | `--calibration-seconds` | Empty-room calibration duration |
 
-Missing camera, missing SFX, or an unavailable virtual camera **does not** stop the preview when the rest of the pipeline can still run.
+Missing SFX or an unavailable virtual camera **does not** stop the preview. A missing or unusable webcam stops the app before any preview window opens.
 
 ## Virtual camera setup
 
@@ -105,13 +105,9 @@ Then run:
 shunkan-ido --virtual-camera
 ```
 
-If you have several video devices, pick the loopback device explicitly:
+The app sends frames to the **first available v4l2loopback device** (a `/dev/video*` node from the module). `--virtual-backend v4l2loopback` selects that **backend** when auto-detection would use another (for example OBS); it does not choose a specific `/dev/videoN` path.
 
-```bash
-shunkan-ido --virtual-camera --virtual-backend v4l2loopback
-```
-
-List devices with `v4l-ctl --list-devices` or `ls /dev/video*`. In your meeting app, select the **Video Loopback** (or similarly named) camera.
+List devices with `v4l2-ctl --list-devices` or `ls /dev/video*`. In your meeting app, select the **Video Loopback** (or similarly named) camera.
 
 See the [v4l2loopback documentation](https://github.com/umlaeute/v4l2loopback) for persistence across reboots and permissions.
 
