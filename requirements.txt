@@ -1,6 +1,6 @@
-opencv-python>=4.8
+opencv-python>=4.8,<4.10
 mediapipe>=0.10
-numpy>=1.26
+numpy>=1.26,<2
 pygame>=2.5
 pyvirtualcam>=0.12
 pytest>=8.0
