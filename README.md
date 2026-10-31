@@ -36,10 +36,15 @@ See [`assets/README.md`](assets/README.md) for drop-in instructions.
 shunkan-ido
 ```
 
-**Preview + virtual camera** (for meeting apps):
+**Preview + virtual camera** (for Zoom / Teams / Meet):
 
 ```bash
+# One-time only (installs/primes OBS Virtual Camera — OBS need not stay open later):
+shunkan-ido --setup-virtual-camera
+
+# Daily use:
 shunkan-ido --virtual-camera
+# Mac with Continuity Camera: prefer the built-in cam, e.g. --camera 1
 ```
 
 **No sound:**
@@ -68,6 +73,7 @@ python -m instant_transmission.main --help
 | `--camera N` | Webcam index (default `0`) |
 | `--width`, `--height`, `--fps` | Capture size and rate |
 | `--virtual-camera` | Also send frames to a virtual camera |
+| `--setup-virtual-camera` | One-time OBS Virtual Camera prime, then exit |
 | `--virtual-backend NAME` | Force backend (`obs`, `v4l2loopback`, etc.) |
 | `--sfx PATH` | Custom sound file |
 | `--no-sfx` | Disable sound |
@@ -81,10 +87,16 @@ Meeting apps need a **virtual camera device** that shows the same frames as the 
 
 ### Windows and macOS (OBS Virtual Camera)
 
-1. Install [OBS Studio](https://obsproject.com/).
-2. Open OBS and click **Start Virtual Camera** at least once (OBS can stay in the background afterward).
-3. Run `shunkan-ido --virtual-camera`.
-4. In Zoom, Teams, or Meet, choose **OBS Virtual Camera** as your camera.
+Meeting apps need a virtual camera device. OBS provides that **once**; you do **not** need the OBS window open on every call afterward.
+
+1. Install [OBS Studio](https://obsproject.com/) once (macOS: `brew install --cask obs`).
+2. Run **one-time** setup: `shunkan-ido --setup-virtual-camera`  
+   (or in OBS: **Start Virtual Camera** once, then Stop, then quit).  
+   On macOS, allow the OBS **camera extension** if System Settings prompts you.
+3. Daily: `shunkan-ido --virtual-camera` (add `--camera 1` if the Mac picks your iPhone).
+4. In Zoom, Teams, or Meet, choose **OBS Virtual Camera**.
+
+If `--virtual-camera` fails, the app prints install/prime steps and keeps the local preview running. On failure it also tries an automatic OBS prime when OBS is already installed.
 
 On Windows you may also use the `unitycapture` backend via `--virtual-backend unitycapture` if you use Unity Capture instead of OBS.
 

@@ -21,6 +21,11 @@ from instant_transmission.effects import compose_teleport
 from instant_transmission.gesture import GestureDetector
 from instant_transmission.output import FrameOutput
 from instant_transmission.state import AppState, TeleportController
+from instant_transmission.virtual_cam import (
+    detect_obs,
+    format_setup_guidance,
+    prime_obs_virtual_camera,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -177,8 +182,32 @@ def _close(resource: object) -> None:
         _log.warning("warning: failed to close %s", type(resource).__name__, exc_info=True)
 
 
+def _run_setup_virtual_camera() -> int:
+    """One-time OBS Virtual Camera prime; does not open the webcam preview."""
+    status = detect_obs()
+    if status.platform == "linux":
+        _log.info("%s", format_setup_guidance(status, open_failed=False))
+        return 0
+    if not status.installed:
+        _log.error("%s", format_setup_guidance(status, open_failed=False))
+        return 1
+    _log.info("Priming OBS Virtual Camera (one-time)…")
+    if not prime_obs_virtual_camera(status):
+        _log.error("%s", format_setup_guidance(status, open_failed=True))
+        return 1
+    _log.info(
+        "Prime launched. In OBS you can Stop Virtual Camera and quit when ready.\n"
+        "Then run:  shunkan-ido --virtual-camera\n"
+        "In Zoom/Teams/Meet select: OBS Virtual Camera"
+    )
+    return 0
+
+
 def run(config: AppConfig) -> int:
     """Run the preview loop. Returns 0 on quit, 1 if capture or the loop fails."""
+    if config.setup_virtual_camera:
+        return _run_setup_virtual_camera()
+
     global _stop_requested
     _stop_requested = False
     _arm_stop_signals()

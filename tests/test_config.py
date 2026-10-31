@@ -18,6 +18,12 @@ def test_virtual_camera_flag():
     assert cfg.virtual_camera is True
 
 
+def test_setup_virtual_camera_flag():
+    cfg = parse_args(["--setup-virtual-camera"])
+    assert cfg.setup_virtual_camera is True
+    assert cfg.virtual_camera is False
+
+
 def test_no_sfx_flag():
     cfg = parse_args(["--no-sfx"])
     assert cfg.sfx_enabled is False

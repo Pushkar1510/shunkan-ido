@@ -6,6 +6,12 @@ from typing import Any
 import cv2
 import numpy as np
 
+from instant_transmission.virtual_cam import (
+    detect_obs,
+    format_setup_guidance,
+    prime_obs_virtual_camera,
+)
+
 _log = logging.getLogger(__name__)
 _PREVIEW_WINDOW = "shunkan-ido"
 
@@ -19,14 +25,22 @@ class FrameOutput:
         show_preview: bool = True,
         virtual_camera: bool = False,
         virtual_backend: str | None = None,
+        *,
+        auto_prime: bool = True,
     ) -> None:
         self._width = width
         self._height = height
         self._show_preview = show_preview
         self._cam: Any = None
+        self._fps = fps
+        self._virtual_backend = virtual_backend
 
         if not virtual_camera:
             return
+        if not self._try_open_virtual_camera():
+            self._handle_open_failure(auto_prime=auto_prime)
+
+    def _try_open_virtual_camera(self) -> bool:
         try:
             import pyvirtualcam
             from pyvirtualcam import PixelFormat
@@ -34,30 +48,56 @@ class FrameOutput:
 
             # Unknown names raise inside Camera.__init__ before _backend exists,
             # and Camera.__del__ then prints an AttributeError. Reject them first.
-            if virtual_backend and virtual_backend not in BACKENDS:
+            if self._virtual_backend and self._virtual_backend not in BACKENDS:
                 available = ", ".join(sorted(BACKENDS)) or "none"
                 raise RuntimeError(
-                    f"unknown virtual camera backend {virtual_backend!r} "
+                    f"unknown virtual camera backend {self._virtual_backend!r} "
                     f"(available: {available})"
                 )
 
             kwargs: dict[str, str] = {}
-            if virtual_backend:
-                kwargs["backend"] = virtual_backend
+            if self._virtual_backend:
+                kwargs["backend"] = self._virtual_backend
             self._cam = pyvirtualcam.Camera(
-                width,
-                height,
-                fps,
+                self._width,
+                self._height,
+                self._fps,
                 fmt=PixelFormat.BGR,
                 **kwargs,
             )
+            _log.info(
+                "Virtual camera ready (%s). In Zoom/Teams/Meet pick "
+                "OBS Virtual Camera (or your loopback device on Linux).",
+                getattr(self._cam, "device", "active"),
+            )
+            return True
         except Exception as exc:
-            # Backend errors must not take down the preview.
             self._cam = None
+            self._last_open_error = exc
+            return False
+
+    def _handle_open_failure(self, *, auto_prime: bool) -> None:
+        exc = getattr(self, "_last_open_error", None)
+        status = detect_obs()
+        if (
+            auto_prime
+            and status.installed
+            and status.platform in ("darwin", "win32")
+        ):
             _log.warning(
-                "warning: virtual camera unavailable (%s); continuing preview-only",
+                "warning: virtual camera unavailable (%s); attempting one-time OBS prime…",
                 exc,
             )
+            if prime_obs_virtual_camera(status) and self._try_open_virtual_camera():
+                return
+            exc = getattr(self, "_last_open_error", exc)
+
+        self._cam = None
+        _log.warning(
+            "warning: virtual camera unavailable (%s); continuing preview-only\n%s",
+            exc,
+            format_setup_guidance(status, open_failed=True),
+        )
 
     def send(self, frame_bgr: np.ndarray) -> None:
         frame = frame_bgr
