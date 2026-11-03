@@ -35,7 +35,7 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     p.add_argument(
         "--setup-virtual-camera",
         action="store_true",
-        help="One-time OBS Virtual Camera prime, then exit (macOS/Windows)",
+        help="One-time virtual camera setup (Ubuntu v4l2loopback / Windows OBS), then exit",
     )
     p.add_argument("--sfx", type=Path, default=_DEFAULT_SFX)
     p.add_argument("--no-sfx", action="store_true")

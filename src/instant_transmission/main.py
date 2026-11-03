@@ -21,11 +21,7 @@ from instant_transmission.effects import compose_teleport
 from instant_transmission.gesture import GestureDetector
 from instant_transmission.output import FrameOutput
 from instant_transmission.state import AppState, TeleportController
-from instant_transmission.virtual_cam import (
-    detect_obs,
-    format_setup_guidance,
-    prime_obs_virtual_camera,
-)
+from instant_transmission.virtual_cam import run_platform_setup
 
 _log = logging.getLogger(__name__)
 
@@ -204,24 +200,13 @@ def _close(resource: object) -> None:
 
 
 def _run_setup_virtual_camera() -> int:
-    """One-time OBS Virtual Camera prime; does not open the webcam preview."""
-    status = detect_obs()
-    if status.platform == "linux":
-        _log.info("%s", format_setup_guidance(status, open_failed=False))
+    """One-time virtual camera setup (Linux loopback or Windows OBS prime)."""
+    result = run_platform_setup()
+    if result.ok:
+        _log.info("%s", result.message)
         return 0
-    if not status.installed:
-        _log.error("%s", format_setup_guidance(status, open_failed=False))
-        return 1
-    _log.info("Priming OBS Virtual Camera (one-time)…")
-    if not prime_obs_virtual_camera(status):
-        _log.error("%s", format_setup_guidance(status, open_failed=True))
-        return 1
-    _log.info(
-        "Prime launched. In OBS you can Stop Virtual Camera and quit when ready.\n"
-        "Then run:  shunkan-ido --virtual-camera\n"
-        "In Zoom/Teams/Meet select: OBS Virtual Camera"
-    )
-    return 0
+    _log.error("%s", result.message)
+    return 1
 
 
 def run(config: AppConfig) -> int:

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import sys
 
 import cv2
 import numpy as np
 
+from instant_transmission.sinks import PyVirtualCamSink, VirtualCamSink, open_pyvirtualcam_sink
 from instant_transmission.virtual_cam import (
     detect_obs,
     format_setup_guidance,
+    preferred_backend,
+    preferred_linux_device,
     prime_obs_virtual_camera,
 )
 
@@ -27,76 +30,69 @@ class FrameOutput:
         virtual_backend: str | None = None,
         *,
         auto_prime: bool = True,
+        sink: VirtualCamSink | None = None,
     ) -> None:
         self._width = width
         self._height = height
         self._show_preview = show_preview
-        self._cam: Any = None
         self._fps = fps
         self._virtual_backend = virtual_backend
+        self._sink: VirtualCamSink | None = None
+        self._last_open_error: BaseException | None = None
 
+        if sink is not None:
+            self._sink = sink
+            return
         if not virtual_camera:
             return
         if not self._try_open_virtual_camera():
             self._handle_open_failure(auto_prime=auto_prime)
 
+    def _resolve_backend_and_device(self) -> tuple[str | None, str | None]:
+        if sys.platform.startswith("linux"):
+            backend = self._virtual_backend or "v4l2loopback"
+            return backend, preferred_linux_device()
+        backend = self._virtual_backend or preferred_backend()
+        return backend, None
+
     def _try_open_virtual_camera(self) -> bool:
         try:
-            import pyvirtualcam
-            from pyvirtualcam import PixelFormat
-            from pyvirtualcam.camera import BACKENDS
-
-            # Unknown names raise inside Camera.__init__ before _backend exists,
-            # and Camera.__del__ then prints an AttributeError. Reject them first.
-            if self._virtual_backend and self._virtual_backend not in BACKENDS:
-                available = ", ".join(sorted(BACKENDS)) or "none"
-                raise RuntimeError(
-                    f"unknown virtual camera backend {self._virtual_backend!r} "
-                    f"(available: {available})"
-                )
-
-            kwargs: dict[str, str] = {}
-            if self._virtual_backend:
-                kwargs["backend"] = self._virtual_backend
-            self._cam = pyvirtualcam.Camera(
+            backend, device = self._resolve_backend_and_device()
+            self._sink = open_pyvirtualcam_sink(
                 self._width,
                 self._height,
                 self._fps,
-                fmt=PixelFormat.BGR,
-                **kwargs,
+                backend=backend,
+                device=device,
             )
             _log.info(
-                "Virtual camera ready (%s). In Zoom/Teams/Meet pick "
-                "OBS Virtual Camera (or your loopback device on Linux).",
-                getattr(self._cam, "device", "active"),
+                "Virtual camera ready (%s). In Zoom/Teams/Meet pick this device.",
+                self._sink.device_name,
             )
             return True
         except Exception as exc:
-            self._cam = None
+            self._sink = None
             self._last_open_error = exc
             return False
 
     def _handle_open_failure(self, *, auto_prime: bool) -> None:
-        exc = getattr(self, "_last_open_error", None)
-        status = detect_obs()
-        if (
-            auto_prime
-            and status.installed
-            and status.platform in ("darwin", "win32")
-        ):
-            _log.warning(
-                "warning: virtual camera unavailable (%s); attempting one-time OBS prime…",
-                exc,
-            )
-            if prime_obs_virtual_camera(status) and self._try_open_virtual_camera():
-                return
-            exc = getattr(self, "_last_open_error", exc)
+        exc = self._last_open_error
+        if auto_prime and sys.platform == "win32":
+            status = detect_obs()
+            if status.installed:
+                _log.warning(
+                    "warning: virtual camera unavailable (%s); attempting one-time OBS prime…",
+                    exc,
+                )
+                if prime_obs_virtual_camera(status) and self._try_open_virtual_camera():
+                    return
+                exc = self._last_open_error
 
-        self._cam = None
+        self._sink = None
         _log.warning(
             "warning: virtual camera unavailable (%s); continuing preview-only\n%s",
             exc,
-            format_setup_guidance(status, open_failed=True),
+            format_setup_guidance(open_failed=True),
         )
 
     def send(self, frame_bgr: np.ndarray) -> None:
@@ -108,10 +104,10 @@ class FrameOutput:
         if self._show_preview:
             cv2.imshow(_PREVIEW_WINDOW, frame)
 
-        if self._cam is None:
+        if self._sink is None:
             return
         try:
-            self._cam.send(np.ascontiguousarray(frame))
+            self._sink.send(frame)
         except Exception as exc:
             self._disable_virtual_camera(exc)
 
@@ -124,16 +120,20 @@ class FrameOutput:
                 pass
 
     def _disable_virtual_camera(self, exc: BaseException | None) -> None:
-        cam = self._cam
-        self._cam = None
+        sink = self._sink
+        self._sink = None
         if exc is not None:
             _log.warning(
                 "warning: virtual camera unavailable (%s); continuing preview-only",
                 exc,
             )
-        if cam is None:
+        if sink is None:
             return
         try:
-            cam.close()
+            sink.close()
         except Exception:
             _log.warning("warning: failed to close virtual camera", exc_info=True)
+
+
+# Re-export for type checkers / tests that may patch the sink class.
+__all__ = ["FrameOutput", "PyVirtualCamSink"]
