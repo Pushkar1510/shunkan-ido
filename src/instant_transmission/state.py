@@ -5,6 +5,7 @@ from enum import Enum, auto
 
 
 class AppState(Enum):
+    WAITING = auto()
     CALIBRATING = auto()
     VISIBLE = auto()
     TELEPORTING_OUT = auto()
@@ -16,10 +17,17 @@ class TeleportController:
     def __init__(self, cooldown_seconds: float, teleport_seconds: float) -> None:
         self.cooldown_seconds = cooldown_seconds
         self.teleport_seconds = max(teleport_seconds, 1e-3)
-        self.state = AppState.CALIBRATING
+        self.state = AppState.WAITING
         self.progress = 0.0
         self._anim_elapsed = 0.0
         self._cooldown_until = 0.0
+
+    def start_calibration(self) -> bool:
+        """Move WAITING → CALIBRATING. Returns True if the transition happened."""
+        if self.state != AppState.WAITING:
+            return False
+        self.state = AppState.CALIBRATING
+        return True
 
     def finish_calibration(self) -> None:
         if self.state == AppState.CALIBRATING:

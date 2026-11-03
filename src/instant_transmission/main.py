@@ -30,6 +30,7 @@ from instant_transmission.virtual_cam import (
 _log = logging.getLogger(__name__)
 
 _QUIT_KEYS = frozenset({ord("q"), ord("Q"), 27})
+_START_CALIBRATION_KEYS = frozenset({ord(" "), 13})  # Space, Enter
 # A hitch shorter than this still counts in full. Longer stalls (first
 # MediaPipe call, a blocked camera) cannot skip calibration or the teleport.
 _MIN_DT_CAP_S = 0.1
@@ -47,24 +48,40 @@ def _arm_stop_signals() -> None:
     signal.signal(signal.SIGTERM, _request_stop)
 
 
-def _overlay_calibration(frame: np.ndarray, progress: float) -> np.ndarray:
-    """Tell the user to leave the shot and show how much calibration remains.
+def _draw_banner(display: np.ndarray, lines: list[str], *, y0: int = 72) -> None:
+    """Draw outlined ASCII text lines (Hershey fonts are ASCII-only)."""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    y = y0
+    for line in lines:
+        origin = (40, y)
+        cv2.putText(display, line, origin, font, 1.0, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(display, line, origin, font, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+        y += 40
 
-    Hershey fonts used by ``cv2.putText`` are ASCII-only, so the ellipsis is
-    three dots rather than a single Unicode character.
-    """
+
+def _overlay_waiting(frame: np.ndarray) -> np.ndarray:
+    """Ask the user to leave the shot before empty-room capture starts."""
+    display = frame.copy()
+    _draw_banner(
+        display,
+        [
+            "Step out of the frame",
+            "Press SPACE (or Enter) when ready",
+        ],
+    )
+    return display
+
+
+def _overlay_calibration(frame: np.ndarray, progress: float) -> np.ndarray:
+    """Tell the user to stay out of the shot and show calibration progress."""
     display = frame.copy()
     progress = float(np.clip(progress, 0.0, 1.0))
-    label = f"Step out of frame... {round(progress * 100):.0f}%"
-    origin = (40, 72)
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(display, label, origin, font, 1.0, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(display, label, origin, font, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+    _draw_banner(display, [f"Capturing empty room... {round(progress * 100):.0f}%"])
 
     height, width = display.shape[:2]
     bar_w = min(480, max(width - 80, 1))
     bar_h = 16
-    x, y = 40, 96
+    x, y = 40, 120
     y2 = min(y + bar_h, height - 1)
     x2 = min(x + bar_w, width - 1)
     cv2.rectangle(display, (x, y), (x2, y2), (0, 0, 0), thickness=-1)
@@ -93,6 +110,8 @@ def _display_frame(
     calibrator: BackgroundCalibrator,
 ) -> np.ndarray:
     state = controller.state
+    if state == AppState.WAITING:
+        return _overlay_waiting(frame)
     if state == AppState.CALIBRATING:
         return _overlay_calibration(frame, calibrator.progress)
     if state == AppState.VISIBLE:
@@ -170,6 +189,8 @@ def _loop(
         _arm_stop_signals()
         if key in _QUIT_KEYS or _stop_requested:
             return
+        if key in _START_CALIBRATION_KEYS and controller.state == AppState.WAITING:
+            controller.start_calibration()
 
 
 def _close(resource: object) -> None:

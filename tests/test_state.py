@@ -2,13 +2,21 @@
 from instant_transmission.state import AppState, TeleportController
 
 
-def test_starts_calibrating():
+def test_starts_waiting():
     c = TeleportController(cooldown_seconds=0.8, teleport_seconds=0.5)
+    assert c.state == AppState.WAITING
+
+
+def test_start_calibration_from_waiting():
+    c = TeleportController(cooldown_seconds=0.8, teleport_seconds=0.5)
+    assert c.start_calibration() is True
     assert c.state == AppState.CALIBRATING
+    assert c.start_calibration() is False
 
 
 def test_calibration_then_gesture_teleports_out():
     c = TeleportController(cooldown_seconds=0.8, teleport_seconds=0.5)
+    c.start_calibration()
     c.finish_calibration()
     assert c.state == AppState.VISIBLE
     started = c.on_gesture(now=1.0)
@@ -18,6 +26,7 @@ def test_calibration_then_gesture_teleports_out():
 
 def test_teleport_out_completes_to_vanished():
     c = TeleportController(cooldown_seconds=0.8, teleport_seconds=0.5)
+    c.start_calibration()
     c.finish_calibration()
     c.on_gesture(now=0.0)
     c.update(now=0.6, dt=0.6)
@@ -26,6 +35,7 @@ def test_teleport_out_completes_to_vanished():
 
 def test_gesture_during_cooldown_ignored():
     c = TeleportController(cooldown_seconds=1.0, teleport_seconds=0.2)
+    c.start_calibration()
     c.finish_calibration()
     assert c.on_gesture(now=0.0) is True
     c.update(now=0.3, dt=0.3)  # -> VANISHED, cooldown starts
@@ -35,6 +45,7 @@ def test_gesture_during_cooldown_ignored():
 
 def test_reappear_cycle():
     c = TeleportController(cooldown_seconds=0.1, teleport_seconds=0.2)
+    c.start_calibration()
     c.finish_calibration()
     c.on_gesture(now=0.0)
     c.update(now=0.25, dt=0.25)
@@ -44,3 +55,9 @@ def test_reappear_cycle():
     assert c.state == AppState.TELEPORTING_IN
     c.update(now=0.7, dt=0.3)
     assert c.state == AppState.VISIBLE
+
+
+def test_finish_calibration_ignored_while_waiting():
+    c = TeleportController(cooldown_seconds=0.8, teleport_seconds=0.5)
+    c.finish_calibration()
+    assert c.state == AppState.WAITING

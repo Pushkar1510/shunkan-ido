@@ -62,7 +62,7 @@ python -m instant_transmission.main --help
 
 ### In the app
 
-1. On startup, **step out of the frame** until calibration finishes (empty-room background).
+1. On startup, the preview waits. **Step out of the frame**, then press **Space** or **Enter** to start empty-room calibration.
 2. While **visible**, use the Instant Transmission pose to **vanish**; while **vanished**, use the same pose to **reappear**. There is a short cooldown between triggers.
 3. Press **`q`**, **`Q`**, or **Esc** to quit. **Ctrl+C** also stops the app when the terminal receives the signal.
 
