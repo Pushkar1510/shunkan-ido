@@ -22,7 +22,8 @@ from __future__ import annotations
 import math
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -42,12 +43,15 @@ FOLDED_REACH = 0.90
 
 # MediaPipe Hands landmark indices.
 _WRIST = 0
+_THUMB_TIP = 4
+_INDEX_MCP = 5
 _INDEX_PIP = 6
 _INDEX_TIP = 8
 _MIDDLE_PIP = 10
 _MIDDLE_TIP = 12
 _RING_PIP = 14
 _RING_TIP = 16
+_PINKY_MCP = 17
 _PINKY_PIP = 18
 _PINKY_TIP = 20
 # MediaPipe Face Mesh / Face Landmarker forehead landmark.
@@ -73,6 +77,44 @@ class _Landmark(Protocol):
 
 def _pixel(landmark: _Landmark, width: int, height: int) -> tuple[float, float]:
     return (landmark.x * width, landmark.y * height)
+
+
+@dataclass(frozen=True)
+class HandSample:
+    """One hand from the current frame.
+
+    ``landmarks`` are MediaPipe-style points with normalized ``x`` and ``y``.
+    ``width`` and ``height`` are the frame size in pixels.
+    """
+
+    hand_id: int
+    landmarks: Sequence[_Landmark]
+    width: int
+    height: int
+
+    def tip_distance_thumb_middle(self) -> float:
+        """Thumb tip to middle tip in normalized image space."""
+        thumb = self.landmarks[_THUMB_TIP]
+        middle = self.landmarks[_MIDDLE_TIP]
+        return math.hypot(thumb.x - middle.x, thumb.y - middle.y)
+
+    def palm_xy(self) -> tuple[float, float]:
+        """Pixel palm: average of wrist, index MCP, and pinky MCP."""
+        total_x = 0.0
+        total_y = 0.0
+        for index in (_WRIST, _INDEX_MCP, _PINKY_MCP):
+            x, y = _pixel(self.landmarks[index], self.width, self.height)
+            total_x += x
+            total_y += y
+        return (total_x / 3.0, total_y / 3.0)
+
+
+@dataclass(frozen=True)
+class FrameGestureResult:
+    """Instant Transmission decision and every hand from one landmark pass."""
+
+    instant_transmission: bool
+    hands: tuple[HandSample, ...]
 
 
 def _baseline_distance(
@@ -296,8 +338,13 @@ class GestureDetector:
             width, height = 1280, 720
         self.process(np.zeros((height, width, 3), dtype=np.uint8))
 
-    def process(self, frame_bgr) -> bool:
-        """Return True when this BGR frame shows the Instant Transmission pose."""
+    def process(self, frame_bgr) -> FrameGestureResult:
+        """Detect Instant Transmission and pack every hand from one pass.
+
+        Hands and face are each landmarked once, with the same timestamp.
+        ``instant_transmission`` uses the existing pose check. Hands are still
+        returned when the pose does not match or the face is missing.
+        """
         import cv2
 
         self._ensure_loaded()
@@ -308,15 +355,27 @@ class GestureDetector:
         timestamp_ms = self._next_timestamp_ms()
         hand_result = self._hands.detect_for_video(mp_image, timestamp_ms)
         face_result = self._face.detect_for_video(mp_image, timestamp_ms)
-        if not hand_result.hand_landmarks or not face_result.face_landmarks:
-            return False
         height, width = frame_bgr.shape[:2]
-        face = face_result.face_landmarks[0]
-        image_size = (width, height)
-        return any(
-            is_instant_transmission(hand, face, image_size)
-            for hand in hand_result.hand_landmarks
+        raw_hands = hand_result.hand_landmarks or ()
+        hands = tuple(
+            HandSample(
+                hand_id=index,
+                landmarks=landmarks,
+                width=width,
+                height=height,
+            )
+            for index, landmarks in enumerate(raw_hands)
         )
+        raw_faces = face_result.face_landmarks or ()
+        instant = False
+        if hands and raw_faces:
+            face = raw_faces[0]
+            image_size = (width, height)
+            instant = any(
+                is_instant_transmission(sample.landmarks, face, image_size)
+                for sample in hands
+            )
+        return FrameGestureResult(instant_transmission=instant, hands=hands)
 
     def close(self) -> None:
         if self._hands is not None:

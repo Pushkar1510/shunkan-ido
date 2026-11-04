@@ -167,7 +167,8 @@ def _loop(
             if calibrator.update(frame, dt):
                 controller.finish_calibration()
         elif state in (AppState.VISIBLE, AppState.VANISHED):
-            if gesture.process(frame) and controller.on_gesture(now):
+            gesture_result = gesture.process(frame)
+            if gesture_result.instant_transmission and controller.on_gesture(now):
                 sfx.play()
 
         # Draw the current teleport frame before update(). A completing
