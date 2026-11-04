@@ -32,6 +32,10 @@ The app looks for **`assets/instant_transmission.mp3`** by default. That file is
 
 See [`assets/README.md`](assets/README.md) for drop-in instructions.
 
+## Phoenix snap (optional)
+
+While **visible**, a quick **finger snap** in view spawns a procedural warm **palm orb** (~1.25s). **Instant Transmission** still takes priority on the same frame (forehead pose vanishes/reappears as before). Disable the orb with **`--no-phoenix`**. Optional snap sound defaults to **`assets/phoenix_snap.mp3`** (not in the repo); override with **`--phoenix-sfx PATH`**. Missing phoenix SFX logs a one-time warning and continues silently.
+
 ## Usage
 
 **Preview only** (default):
@@ -81,6 +85,8 @@ python -m instant_transmission.main --help
 | `--virtual-backend NAME` | Force backend (`v4l2loopback`, `obs`, `unitycapture`, …) |
 | `--sfx PATH` | Custom sound file |
 | `--no-sfx` | Disable sound |
+| `--no-phoenix` | Disable Phoenix snap orb |
+| `--phoenix-sfx PATH` | Custom Phoenix snap sound |
 | `--calibration-seconds` | Empty-room calibration duration |
 
 Missing SFX or an unavailable virtual camera **does not** stop the preview.

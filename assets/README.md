@@ -12,6 +12,16 @@ assets/instant_transmission.mp3
 
 That path is the default for `shunkan-ido` (see `--sfx` in the main [README](../README.md) to use another file).
 
+## Phoenix snap sound (optional)
+
+For the finger-snap palm orb, place a short MP3 at:
+
+```text
+assets/phoenix_snap.mp3
+```
+
+Default for Phoenix snap SFX (see `--phoenix-sfx` and `--no-phoenix` in the main [README](../README.md)). You can use any short clip you own or generate a synthetic snap locally; do not use copyrighted game audio.
+
 ## Git and licensing
 
 - `*.mp3`, `*.wav`, and `*.ogg` under `assets/` are listed in [`.gitignore`](../.gitignore) so local copies are not committed by mistake.
