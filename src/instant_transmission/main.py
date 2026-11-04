@@ -20,6 +20,8 @@ from instant_transmission.config import AppConfig, parse_args
 from instant_transmission.effects import compose_teleport
 from instant_transmission.gesture import GestureDetector
 from instant_transmission.output import FrameOutput
+from instant_transmission.phoenix_fx import PhoenixOrb, draw_orbs
+from instant_transmission.snap_gesture import SnapDetector
 from instant_transmission.state import AppState, TeleportController
 from instant_transmission.virtual_cam import run_platform_setup
 
@@ -130,6 +132,11 @@ def _display_frame(
     )
 
 
+def _drop_expired_orbs(orbs: list[PhoenixOrb], now: float) -> None:
+    """Remove orbs whose life has ended. ``draw_orbs`` does this only when called."""
+    orbs[:] = [orb for orb in orbs if now < orb.born_at + orb.duration]
+
+
 def _clamp_dt(elapsed: float, fps: int) -> float:
     """Limit one frame's timestep to about ``1/fps``, and at least 0.1s.
 
@@ -150,10 +157,15 @@ def _loop(
     calibrator: BackgroundCalibrator,
     controller: TeleportController,
     fps: int,
+    phoenix_sfx: SfxPlayer | None = None,
+    *,
+    phoenix_enabled: bool = True,
 ) -> None:
     # Clock starts after model warmup, so the first live frame does not
     # include graph compilation. ``_clamp_dt`` covers any later stall.
     previous = time.perf_counter()
+    orbs: list[PhoenixOrb] = []
+    snap = SnapDetector()
     while True:
         if _stop_requested:
             return
@@ -167,14 +179,27 @@ def _loop(
             if calibrator.update(frame, dt):
                 controller.finish_calibration()
         elif state in (AppState.VISIBLE, AppState.VANISHED):
-            gesture_result = gesture.process(frame)
-            if gesture_result.instant_transmission and controller.on_gesture(now):
+            result = gesture.process(frame)
+            if result.instant_transmission and controller.on_gesture(now):
                 sfx.play()
+            elif (
+                phoenix_enabled
+                and state == AppState.VISIBLE
+                and not result.instant_transmission
+            ):
+                for event in snap.update(result.hands, now):
+                    x, y = event.palm_xy
+                    orbs.append(PhoenixOrb(x=x, y=y, born_at=now))
+                    if phoenix_sfx is not None:
+                        phoenix_sfx.play()
 
         # Draw the current teleport frame before update(). A completing
         # update leaves TELEPORTING_* and clears progress in the same call,
         # so the in-progress frame would be skipped if update ran first.
         display = _display_frame(frame, controller, calibrator)
+        _drop_expired_orbs(orbs, now)
+        if phoenix_enabled and controller.state == AppState.VISIBLE:
+            display = draw_orbs(display, orbs, now)
         controller.update(now, dt)
         output.send(display)
 
@@ -222,6 +247,7 @@ def run(config: AppConfig) -> int:
     output: FrameOutput | None = None
     gesture: GestureDetector | None = None
     sfx: SfxPlayer | None = None
+    phoenix_sfx: SfxPlayer | None = None
     try:
         capture = CameraCapture(config.camera, config.width, config.height, config.fps)
         output = FrameOutput(
@@ -239,9 +265,20 @@ def run(config: AppConfig) -> int:
             _log.info("Interrupted during model load")
             return 0
         sfx = SfxPlayer(config.sfx_path, config.sfx_enabled)
+        phoenix_sfx = SfxPlayer(config.phoenix_sfx_path, config.phoenix_enabled)
         calibrator = BackgroundCalibrator(config.calibration_seconds)
         controller = TeleportController(config.cooldown_seconds, config.teleport_seconds)
-        _loop(capture, output, gesture, sfx, calibrator, controller, config.fps)
+        _loop(
+            capture,
+            output,
+            gesture,
+            sfx,
+            calibrator,
+            controller,
+            config.fps,
+            phoenix_sfx,
+            phoenix_enabled=config.phoenix_enabled,
+        )
         return 0
     except KeyboardInterrupt:
         _log.info("Interrupted")
@@ -257,6 +294,7 @@ def run(config: AppConfig) -> int:
         return 1
     finally:
         _close(gesture)
+        _close(phoenix_sfx)
         _close(sfx)
         _close(output)
         _close(capture)

@@ -6,6 +6,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SFX = _ROOT / "assets" / "instant_transmission.mp3"
+_DEFAULT_PHOENIX_SFX = _ROOT / "assets" / "phoenix_snap.mp3"
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,8 @@ class AppConfig:
     setup_virtual_camera: bool = False
     sfx_path: Path = _DEFAULT_SFX
     sfx_enabled: bool = True
+    phoenix_enabled: bool = True
+    phoenix_sfx_path: Path = _DEFAULT_PHOENIX_SFX
     calibration_seconds: float = 4.0
     cooldown_seconds: float = 0.8
     teleport_seconds: float = 0.7
@@ -39,6 +42,8 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     )
     p.add_argument("--sfx", type=Path, default=_DEFAULT_SFX)
     p.add_argument("--no-sfx", action="store_true")
+    p.add_argument("--no-phoenix", action="store_true", help="Disable the Phoenix snap orb")
+    p.add_argument("--phoenix-sfx", type=Path, default=_DEFAULT_PHOENIX_SFX)
     p.add_argument("--calibration-seconds", type=float, default=4.0)
     args = p.parse_args(argv)
     return AppConfig(
@@ -51,5 +56,7 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         setup_virtual_camera=args.setup_virtual_camera,
         sfx_path=args.sfx,
         sfx_enabled=not args.no_sfx,
+        phoenix_enabled=not args.no_phoenix,
+        phoenix_sfx_path=args.phoenix_sfx,
         calibration_seconds=args.calibration_seconds,
     )
