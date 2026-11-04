@@ -130,7 +130,7 @@ def test_visible_snap_spawns_orb_and_plays_phoenix_sfx(monkeypatch):
     assert gesture.calls == 4
     assert it_sfx.plays == 0
     assert phoenix_sfx.plays == 1
-    assert output.frames[2][cy, cx].sum() == 0
+    assert output.frames[2][cy, cx].sum() > 0
     assert output.frames[3][cy, cx].sum() > 0
 
 

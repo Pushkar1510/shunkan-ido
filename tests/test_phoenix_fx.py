@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from instant_transmission.phoenix_fx import PhoenixOrb, draw_orbs
+from instant_transmission.phoenix_fx import PhoenixOrb, _life_alpha, draw_orbs
 
 
 def _blank(h: int = 120, w: int = 160) -> np.ndarray:
@@ -38,6 +38,20 @@ def test_mid_life_orb_modifies_pixels_near_center():
     ix, iy = int(cx), int(cy)
     assert out[iy, ix].sum() > 0
     assert not np.array_equal(out, frame)
+
+
+def test_life_alpha_visible_at_spawn():
+    duration = 1.25
+    assert _life_alpha(0.0, 0.0, duration) == pytest.approx(0.25)
+    assert _life_alpha(-0.01, 0.0, duration) == 0.0
+
+
+def test_spawn_frame_orb_modifies_center_pixel():
+    frame = _blank()
+    born_at = 50.0
+    orbs = [PhoenixOrb(x=80.0, y=60.0, born_at=born_at, duration=1.25)]
+    out = draw_orbs(frame, orbs, now=born_at)
+    assert out[60, 80].sum() > 0
 
 
 def test_empty_orb_list_returns_copy_unchanged():

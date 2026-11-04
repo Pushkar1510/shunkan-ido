@@ -35,12 +35,12 @@ def _life_alpha(now: float, born_at: float, duration: float) -> float:
     if duration <= 0.0:
         return 0.0
     t = (now - born_at) / duration
-    if t <= 0.0 or t >= 1.0:
+    if t < 0.0 or t >= 1.0:
         return 0.0
     ease = EASE_IN_FRAC
     if t < ease:
         u = t / ease
-        return u * u
+        return 0.25 + 0.75 * (u * u)
     if t > 1.0 - ease:
         u = (1.0 - t) / ease
         return u * u
