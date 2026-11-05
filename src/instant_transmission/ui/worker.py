@@ -18,8 +18,8 @@ class CamWorker(QObject):
 
     finished = Signal(int)
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
         self._thread: threading.Thread | None = None
 
     @property
