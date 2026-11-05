@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 import time
 
 import cv2
@@ -40,8 +41,15 @@ def _request_stop(_signum: int, _frame: object) -> None:
 
 
 def _arm_stop_signals() -> None:
-    signal.signal(signal.SIGINT, _request_stop)
-    signal.signal(signal.SIGTERM, _request_stop)
+    """Register Ctrl+C handlers. No-op off the main thread (e.g. GUI worker)."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        signal.signal(signal.SIGINT, _request_stop)
+        signal.signal(signal.SIGTERM, _request_stop)
+    except ValueError:
+        # Interpreter / platform may still refuse signal registration.
+        return
 
 
 def _draw_banner(display: np.ndarray, lines: list[str], *, y0: int = 72) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -286,9 +287,8 @@ def setup_linux_virtual_camera(*, dry_run: bool = False) -> SetupResult:
             device=None,
         )
 
-    # Attempt modprobe (may need sudo password / fail without privileges).
-    cmd = [
-        "sudo",
+    # Prefer pkexec in GUI (graphical password); sudo needs a TTY and hangs the launcher.
+    modprobe_args = [
         "modprobe",
         "v4l2loopback",
         "devices=1",
@@ -296,6 +296,20 @@ def setup_linux_virtual_camera(*, dry_run: bool = False) -> SetupResult:
         f"card_label={LOOPBACK_LABEL}",
         "exclusive_caps=1",
     ]
+    if shutil.which("pkexec"):
+        cmd = ["pkexec", *modprobe_args]
+    elif sys.stdin.isatty():
+        cmd = ["sudo", *modprobe_args]
+    else:
+        return SetupResult(
+            ok=False,
+            message=(
+                "Need elevated privileges to load v4l2loopback. "
+                "Install pkexec (polkit) or run from a terminal:\n"
+                f"  sudo {' '.join(modprobe_args)}\n"
+                + format_linux_setup_guidance()
+            ),
+        )
     try:
         completed = subprocess.run(cmd, check=False, capture_output=True, text=True)
     except OSError as exc:
