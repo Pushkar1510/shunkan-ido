@@ -14,6 +14,7 @@ dependencies = [
   "numpy>=1.26,<2",
   "pygame>=2.5",
   "pyvirtualcam>=0.12",
+  "PySide6>=6.6",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +22,7 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 shunkan-ido = "instant_transmission.main:main"
+shunkan-ido-gui = "instant_transmission.ui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

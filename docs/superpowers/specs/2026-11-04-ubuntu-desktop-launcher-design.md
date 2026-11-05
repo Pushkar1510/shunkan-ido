@@ -15,7 +15,7 @@ Ship **Shunkan-Ido** as an Ubuntu `.deb` with a polished **PySide6** launcher: f
 - Good launcher UI (not a bare dialog): hero brand, readable overlay, primary/secondary CTAs, light motion.
 - Two-button flow: Setup (once) → Start calibrating (daily).
 - Reuse existing Instant Transmission core (`run` / capture / gesture / effects / virtual cam).
-- User-supplied `assets/launcher_bg.png` (copyright responsibility on the distributor); fallback background if missing.
+- Brand art in `assets/`: `Shunkan_ido_bg.jpg`, `shunkan_ido_logo.png`, `shunkan_ido_icon.png` (distributor/legal owns rights); code falls back if a file is missing.
 - Keep `shunkan-ido` CLI working.
 
 ## 3. Non-Goals (this phase)

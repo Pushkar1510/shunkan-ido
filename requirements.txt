@@ -3,4 +3,5 @@ mediapipe>=0.10
 numpy>=1.26,<2
 pygame>=2.5
 pyvirtualcam>=0.12
+PySide6>=6.6
 pytest>=8.0

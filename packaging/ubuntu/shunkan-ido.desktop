@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Shunkan-Ido
+Comment=Instant Transmission for your meetings
+Exec=shunkan-ido-gui
+Icon=shunkan-ido
+Terminal=false
+Categories=AudioVideo;Video;Utility;
+Keywords=webcam;virtual;camera;instant;transmission;
+StartupNotify=true

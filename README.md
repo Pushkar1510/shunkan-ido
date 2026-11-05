@@ -32,7 +32,26 @@ The app looks for **`assets/instant_transmission.mp3`** by default. That file is
 
 See [`assets/README.md`](assets/README.md) for drop-in instructions.
 
-## Usage
+## Desktop launcher (Ubuntu)
+
+Brand assets live in `assets/`:
+
+- `Shunkan_ido_bg.jpg` — launcher background  
+- `shunkan_ido_logo.png` — header logo  
+- `shunkan_ido_icon.png` — window icon  
+
+```bash
+pip install -e .
+shunkan-ido-gui
+```
+
+In the window:
+
+1. **Setup virtual camera** (once — may ask for your password)  
+2. **Start calibrating** — opens the Instant Transmission preview + virtual camera  
+3. In Meet/Zoom/Teams pick **Shunkan-Ido**
+
+## Usage (CLI)
 
 **Preview only** (default):
 
