@@ -1,4 +1,24 @@
-# Ubuntu packaging — virtual camera
+# Ubuntu packaging
+
+## `.deb` for friends (amd64)
+
+On this machine (Ubuntu amd64), from the repo root:
+
+```bash
+bash packaging/ubuntu/build-deb.sh
+```
+
+Output: `dist/shunkan-ido_<version>_amd64.deb`
+
+Friend install:
+
+```bash
+sudo apt install ./shunkan-ido_0.1.0_amd64.deb
+```
+
+Then open **Shunkan-Ido** from the app grid → **Setup virtual camera** → **Start calibrating** → in Meet pick **Shunkan-Ido**.
+
+## Virtual camera
 
 Shunkan-ido publishes Instant Transmission frames to a **v4l2loopback** device named **Shunkan-Ido**. Meeting apps (Google Meet, Zoom, etc.) select that camera. **OBS is not required** on Ubuntu.
 

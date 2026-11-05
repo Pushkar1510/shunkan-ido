@@ -136,9 +136,58 @@ def test_setup_linux_already_ready(monkeypatch: pytest.MonkeyPatch) -> None:
         "instant_transmission.virtual_cam._device_card_name",
         lambda _d: LOOPBACK_LABEL,
     )
+    monkeypatch.setattr(
+        "instant_transmission.virtual_cam.linux_loopback_producer_ready",
+        lambda _d=None: True,
+    )
     result = setup_linux_virtual_camera()
     assert result.ok is True
     assert result.device == device
+
+
+def test_setup_linux_reloads_when_not_output_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("instant_transmission.virtual_cam.sys.platform", "linux")
+    device = Path("/dev/video10")
+    calls: list[list[str]] = []
+
+    def fake_detect() -> MagicMock:
+        return MagicMock(device=device, module_loaded=True, notes="")
+
+    monkeypatch.setattr(
+        "instant_transmission.virtual_cam.detect_linux_loopback",
+        fake_detect,
+    )
+    monkeypatch.setattr(
+        "instant_transmission.virtual_cam._device_card_name",
+        lambda _d: LOOPBACK_LABEL,
+    )
+    # First check fails (stuck caps); after reload, ready.
+    ready_states = iter([False, True])
+    monkeypatch.setattr(
+        "instant_transmission.virtual_cam.linux_loopback_producer_ready",
+        lambda _d=None: next(ready_states, True),
+    )
+    monkeypatch.setattr(
+        "instant_transmission.virtual_cam._elevated_linux_reload_cmd",
+        lambda: ["pkexec", "bash", "-c", "modprobe -r v4l2loopback; modprobe v4l2loopback"],
+    )
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> MagicMock:
+        calls.append(cmd)
+        result = MagicMock()
+        result.returncode = 0
+        result.stderr = ""
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr("instant_transmission.virtual_cam.subprocess.run", fake_run)
+    monkeypatch.setattr("instant_transmission.virtual_cam.time.sleep", lambda _s: None)
+    result = setup_linux_virtual_camera()
+    assert result.ok is True
+    assert calls and "pkexec" in calls[0][0]
+    assert any("modprobe -r" in part for part in calls[0])
 
 
 def test_prime_obs_refuses_non_windows() -> None:

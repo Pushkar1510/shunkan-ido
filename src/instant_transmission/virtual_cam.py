@@ -21,9 +21,17 @@ _log = logging.getLogger(__name__)
 LOOPBACK_LABEL = "Shunkan-Ido"
 _OBS_DOWNLOAD = "https://obsproject.com/"
 _PRIME_WAIT_S = 4.0
-_LINUX_MODPROBE = (
-    f"sudo modprobe v4l2loopback devices=1 video_nr=10 "
+_VIDEO_NR = 10
+# Match pyvirtualcam: it requires V4L2_CAP_VIDEO_OUTPUT on ``capabilities``.
+_V4L2_CAP_VIDEO_OUTPUT = 0x00000002
+_V4L2_CAP_DEVICE_CAPS = 0x80000000
+_LINUX_MODPROBE_ARGS = (
+    f"devices=1 video_nr={_VIDEO_NR} "
     f"card_label={LOOPBACK_LABEL} exclusive_caps=1"
+)
+_LINUX_MODPROBE = f"sudo modprobe v4l2loopback {_LINUX_MODPROBE_ARGS}"
+_LINUX_RELOAD = (
+    f"sudo modprobe -r v4l2loopback; {_LINUX_MODPROBE}"
 )
 
 
@@ -137,6 +145,57 @@ def _device_card_name(device: Path) -> str:
     return ""
 
 
+def _device_v4l2_caps(device: Path) -> tuple[int, int] | None:
+    """Return ``(capabilities, device_caps)`` via ``VIDIOC_QUERYCAP``, or None."""
+    import array
+    import fcntl
+    import struct
+
+    # struct v4l2_capability is 104 bytes; ioctl encodes that size.
+    vidioc_querycap = 0x80685600
+    buf = array.array("B", [0] * 104)
+    try:
+        fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
+    except OSError:
+        try:
+            fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            return None
+    try:
+        fcntl.ioctl(fd, vidioc_querycap, buf, True)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    capabilities = struct.unpack_from("I", buf, 84)[0]
+    device_caps = struct.unpack_from("I", buf, 88)[0]
+    return capabilities, device_caps
+
+
+def linux_loopback_producer_ready(device: Path | None = None) -> bool:
+    """True when pyvirtualcam can open the node as a video OUTPUT device.
+
+    With ``exclusive_caps=1``, a healthy idle loopback advertises OUTPUT. After
+    Chrome/Meet probes the device first, caps can stick with neither OUTPUT nor
+    CAPTURE — Setup must reload the module before Start can feed Meet.
+    """
+    if device is None:
+        device = detect_linux_loopback().device
+    if device is None or not device.exists():
+        return False
+    caps = _device_v4l2_caps(device)
+    if caps is None:
+        return False
+    capabilities, device_caps = caps
+    if capabilities & _V4L2_CAP_VIDEO_OUTPUT:
+        return True
+    if (capabilities & _V4L2_CAP_DEVICE_CAPS) and (
+        device_caps & _V4L2_CAP_VIDEO_OUTPUT
+    ):
+        return True
+    return False
+
+
 def detect_linux_loopback() -> LoopbackStatus:
     """Detect whether a Shunkan-Ido (or any) v4l2loopback device is available."""
     if not sys.platform.startswith("linux"):
@@ -204,19 +263,30 @@ def format_linux_setup_guidance(*, open_failed: bool = False) -> str:
     lines: list[str] = []
     if open_failed:
         lines.append("Could not open the Linux virtual camera.")
+        if status.device is not None and not linux_loopback_producer_ready(status.device):
+            lines.append(
+                f"{status.device} exists but is not a video OUTPUT device "
+                "(often after Meet/Chrome opened it first). Reload the module, "
+                "then Start *before* opening Meet:"
+            )
+            lines.append(f"  {_LINUX_RELOAD}")
     lines.append("Ubuntu / Debian one-time setup (no OBS):")
     lines.append("  1. Run:  bash packaging/ubuntu/setup-virtual-camera.sh")
     lines.append("     or:")
     lines.append("       sudo apt install -y v4l2loopback-dkms v4l2loopback-utils")
-    lines.append(f"       {_LINUX_MODPROBE}")
-    lines.append("  2. Run:  shunkan-ido --setup-virtual-camera   # verifies the device")
-    lines.append("  3. Daily:  shunkan-ido --virtual-camera")
+    lines.append(f"       {_LINUX_RELOAD}")
+    lines.append("  2. Run:  shunkan-ido --setup-virtual-camera   # verifies / reloads if needed")
+    lines.append("  3. Daily:  shunkan-ido --virtual-camera   # then open Meet")
     lines.append(
         f"  4. In Meet/Zoom/Teams pick the camera named {LOOPBACK_LABEL!r} "
-        "(or Video Loopback)."
+        "(not Integrated Camera)."
     )
     if status.device is not None:
-        lines.append(f"Detected loopback device: {status.device}")
+        ready = linux_loopback_producer_ready(status.device)
+        lines.append(
+            f"Detected loopback device: {status.device}"
+            + (" (OUTPUT ready)" if ready else " (not OUTPUT-ready — reload required)")
+        )
     elif status.notes:
         lines.append(status.notes)
     return "\n".join(lines)
@@ -265,13 +335,38 @@ def format_setup_guidance(
     )
 
 
+def _linux_reload_shell() -> str:
+    """Shell that unloads then loads v4l2loopback with Shunkan-Ido params.
+
+    A plain ``modprobe`` while the module is already loaded ignores new
+    parameters and cannot repair a caps-stuck ``/dev/videoN``.
+    """
+    return (
+        "modprobe -r v4l2loopback 2>/dev/null || true; "
+        f"modprobe v4l2loopback {_LINUX_MODPROBE_ARGS}"
+    )
+
+
+def _elevated_linux_reload_cmd() -> list[str] | None:
+    shell = _linux_reload_shell()
+    if shutil.which("pkexec"):
+        return ["pkexec", "bash", "-c", shell]
+    if sys.stdin.isatty() and shutil.which("sudo"):
+        return ["sudo", "bash", "-c", shell]
+    return None
+
+
 def setup_linux_virtual_camera(*, dry_run: bool = False) -> SetupResult:
-    """Try to load v4l2loopback with the Shunkan-Ido label; return status."""
+    """Load or reload v4l2loopback so pyvirtualcam can open it as OUTPUT."""
     if not sys.platform.startswith("linux"):
         return SetupResult(ok=False, message="Linux setup only runs on Linux.")
 
     current = detect_linux_loopback()
-    if current.device is not None and _device_card_name(current.device) == LOOPBACK_LABEL:
+    labeled = (
+        current.device is not None
+        and _device_card_name(current.device) == LOOPBACK_LABEL
+    )
+    if labeled and linux_loopback_producer_ready(current.device):
         return SetupResult(
             ok=True,
             message=f"Virtual camera ready: {current.device} ({LOOPBACK_LABEL})",
@@ -282,31 +377,19 @@ def setup_linux_virtual_camera(*, dry_run: bool = False) -> SetupResult:
         return SetupResult(
             ok=False,
             message=(
-                "Would install/load v4l2loopback.\n" + format_linux_setup_guidance()
+                "Would reload v4l2loopback.\n" + format_linux_setup_guidance()
             ),
             device=None,
         )
 
-    # Prefer pkexec in GUI (graphical password); sudo needs a TTY and hangs the launcher.
-    modprobe_args = [
-        "modprobe",
-        "v4l2loopback",
-        "devices=1",
-        "video_nr=10",
-        f"card_label={LOOPBACK_LABEL}",
-        "exclusive_caps=1",
-    ]
-    if shutil.which("pkexec"):
-        cmd = ["pkexec", *modprobe_args]
-    elif sys.stdin.isatty():
-        cmd = ["sudo", *modprobe_args]
-    else:
+    cmd = _elevated_linux_reload_cmd()
+    if cmd is None:
         return SetupResult(
             ok=False,
             message=(
-                "Need elevated privileges to load v4l2loopback. "
+                "Need elevated privileges to (re)load v4l2loopback. "
                 "Install pkexec (polkit) or run from a terminal:\n"
-                f"  sudo {' '.join(modprobe_args)}\n"
+                f"  {_LINUX_RELOAD}\n"
                 + format_linux_setup_guidance()
             ),
         )
@@ -315,7 +398,7 @@ def setup_linux_virtual_camera(*, dry_run: bool = False) -> SetupResult:
     except OSError as exc:
         return SetupResult(
             ok=False,
-            message=f"Failed to run modprobe: {exc}\n{format_linux_setup_guidance()}",
+            message=f"Failed to reload v4l2loopback: {exc}\n{format_linux_setup_guidance()}",
         )
 
     if completed.returncode != 0:
@@ -323,9 +406,10 @@ def setup_linux_virtual_camera(*, dry_run: bool = False) -> SetupResult:
         return SetupResult(
             ok=False,
             message=(
-                f"modprobe failed (exit {completed.returncode})"
+                f"v4l2loopback reload failed (exit {completed.returncode})"
                 + (f": {err}" if err else "")
                 + "\n"
+                + "Close apps using the camera (Meet/Chrome preview), then retry.\n"
                 + format_linux_setup_guidance()
             ),
         )
@@ -336,13 +420,26 @@ def setup_linux_virtual_camera(*, dry_run: bool = False) -> SetupResult:
         return SetupResult(
             ok=False,
             message=(
-                "modprobe succeeded but no loopback device was found.\n"
+                "Reload finished but no loopback device was found.\n"
                 + format_linux_setup_guidance()
             ),
         )
+    if not linux_loopback_producer_ready(status.device):
+        return SetupResult(
+            ok=False,
+            message=(
+                f"{status.device} still is not a video OUTPUT device after reload.\n"
+                "Fully quit Chrome/Meet, run Setup again, then Start before opening Meet.\n"
+                + format_linux_setup_guidance(open_failed=True)
+            ),
+            device=status.device,
+        )
     return SetupResult(
         ok=True,
-        message=f"Virtual camera ready: {status.device} ({_device_card_name(status.device) or LOOPBACK_LABEL})",
+        message=(
+            f"Virtual camera ready: {status.device} "
+            f"({_device_card_name(status.device) or LOOPBACK_LABEL})"
+        ),
         device=status.device,
     )
 

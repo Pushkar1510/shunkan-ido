@@ -27,6 +27,7 @@ from instant_transmission.ui.worker import CamWorker
 from instant_transmission.virtual_cam import (
     LOOPBACK_LABEL,
     detect_linux_loopback,
+    linux_loopback_producer_ready,
     run_platform_setup,
 )
 
@@ -166,7 +167,8 @@ class LauncherWindow(QMainWindow):
         glass_layout.addLayout(buttons)
 
         hint = QLabel(
-            f"After Start, pick the camera named “{LOOPBACK_LABEL}” in Meet / Zoom / Teams."
+            f"Keep this app Running, then in Meet choose “{LOOPBACK_LABEL}” — "
+            "not Integrated Camera (that one stays busy). Restart Chrome if you don’t see it."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -264,11 +266,18 @@ class LauncherWindow(QMainWindow):
             return
         if sys.platform.startswith("linux"):
             loop = detect_linux_loopback()
-            if loop.device is not None:
+            if loop.device is not None and linux_loopback_producer_ready(loop.device):
                 note = f"Virtual camera ready ({loop.device})"
                 if loop.notes:
                     note = f"{note}. {loop.notes}"
                 self._set_status(CamStatus.READY, note)
+                return
+            if loop.device is not None:
+                self._set_status(
+                    CamStatus.NEEDS_SETUP,
+                    f"{loop.device} needs a reload (Meet/Chrome may have locked it). "
+                    "Run Setup, then Start before opening Meet.",
+                )
                 return
             self._set_status(
                 CamStatus.NEEDS_SETUP,
@@ -322,7 +331,7 @@ class LauncherWindow(QMainWindow):
     def _on_start_stop(self) -> None:
         if self._worker.running:
             self._worker.stop()
-            self._message.setText("Stopping… close the preview with q/Esc if it stays open.")
+            self._message.setText("Stopping preview…")
             return
 
         if self._status == CamStatus.NEEDS_SETUP:
@@ -342,7 +351,8 @@ class LauncherWindow(QMainWindow):
             return
         self._set_status(
             CamStatus.RUNNING,
-            "Step out of frame, then press Space in the preview to calibrate.",
+            f"Calibrate in the preview (Space). In Meet pick “{LOOPBACK_LABEL}”, "
+            "not Integrated Camera.",
         )
 
     def _handle_worker_finished(self, code: int) -> None:

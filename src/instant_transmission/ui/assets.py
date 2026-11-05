@@ -1,11 +1,16 @@
-"""Resolve brand art shipped under ``assets/``."""
+"""Resolve brand art shipped under ``assets/``.
+
+Looks in (first hit wins):
+
+1. ``SHUNKAN_IDO_ASSETS`` if set
+2. ``/opt/shunkan-ido/assets`` (``.deb`` install)
+3. Repo / source checkout ``assets/`` next to the project root
+"""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parents[3]
-_ASSETS = _ROOT / "assets"
 
 BACKGROUND_CANDIDATES = (
     "Shunkan_ido_bg.jpg",
@@ -22,15 +27,43 @@ ICON_CANDIDATES = (
 )
 
 
+def _repo_assets_dir() -> Path:
+    # ui/assets.py → parents[3] == repo root when running from ``src/`` layout
+    return Path(__file__).resolve().parents[3] / "assets"
+
+
+def _candidate_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    env = os.environ.get("SHUNKAN_IDO_ASSETS")
+    if env:
+        dirs.append(Path(env))
+    dirs.append(Path("/opt/shunkan-ido/assets"))
+    dirs.append(_repo_assets_dir())
+    # Deduplicate while preserving order
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for path in dirs:
+        resolved = path.resolve() if path.exists() else path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        out.append(path)
+    return out
+
+
 def assets_dir() -> Path:
-    return _ASSETS
+    for path in _candidate_dirs():
+        if path.is_dir():
+            return path
+    return _repo_assets_dir()
 
 
 def _first_existing(names: tuple[str, ...]) -> Path | None:
-    for name in names:
-        path = _ASSETS / name
-        if path.is_file():
-            return path
+    for directory in _candidate_dirs():
+        for name in names:
+            path = directory / name
+            if path.is_file():
+                return path
     return None
 
 

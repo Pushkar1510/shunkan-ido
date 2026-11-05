@@ -1,11 +1,29 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_SFX = _ROOT / "assets" / "instant_transmission.mp3"
+
+
+def _default_sfx_path() -> Path:
+    """Prefer ``.deb`` / env assets, then source-tree ``assets/``."""
+    name = "instant_transmission.mp3"
+    env = os.environ.get("SHUNKAN_IDO_ASSETS")
+    candidates = []
+    if env:
+        candidates.append(Path(env) / name)
+    candidates.append(Path("/opt/shunkan-ido/assets") / name)
+    candidates.append(_ROOT / "assets" / name)
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[-1]
+
+
+_DEFAULT_SFX = _default_sfx_path()
 
 
 @dataclass(frozen=True)
